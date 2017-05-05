@@ -43,6 +43,7 @@ const MediaObjectSanitizer = require('../plugins/sanitizers/media-object');
  * @type       {Function}
  */
 const Salsa20Poly1305Algorithm = require('../algorithms/salsa20poly1305');
+const CryptpadAlgorithm = require('../algorithms/cryptpad');
 
 /**
  * Store every modules/plugins inside various stores.
@@ -72,5 +73,6 @@ MediaTag.PluginStore.store(new ClearKeyFilter());
 MediaTag.PluginStore.store(new MediaObjectSanitizer());
 
 CryptoFilter.FunctionStore.store('salsa20poly1305', Salsa20Poly1305Algorithm);
+CryptoFilter.FunctionStore.store('cryptpad', CryptpadAlgorithm);
 
 module.exports = MediaTag;
