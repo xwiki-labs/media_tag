@@ -3,7 +3,7 @@ const Errors =             require('../errors');
 const RunningEngine =     require('../engines/running-engine');
 const PARANOIA = true;
 const plainChunkLength = 128 * 1024;
-const cypherChunkLength = 131088:
+const cypherChunkLength = 131088;
 
 /**
  * Class for crypto.
