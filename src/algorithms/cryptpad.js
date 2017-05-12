@@ -47,25 +47,23 @@ class Cryptopad {
         }
     }
 
+    static encodePrefix (p) {
+        return [
+            65280, // 255 << 8
+            255,
+        ].map(function (n, i) {
+            return (p & n) >> ((1 - i) * 8);
+        });
+    }
+
+    static decodePrefix (A) {
+        return (A[0] << 8) | A[1];
+    }
+
     static joinChunks (chunks) {
         return new Uint8Array(chunks.reduce(function (A, B) {
             return Cryptopad.slice(A).concat(Cryptopad.slice(B));
         }, []));
-    }
-
-    static padChunk (A) {
-        var padding;
-        if (A.length === plainChunkLength) { return A; }
-        if (A.length < plainChunkLength) {
-            padding = new Array(plainChunkLength - A.length).fill(32);
-            return A.concat(padding);
-        }
-        if (A.length > plainChunkLength) {
-            // how many times larger is it?
-            var chunks = Math.ceil(A.length / plainChunkLength);
-            padding = new Array((plainChunkLength * chunks) - A.length).fill(32);
-            return A.concat(padding);
-        }
     }
 
 	/**
@@ -125,11 +123,37 @@ class Cryptopad {
 	 */
     static decrypt (u8, key) {
         const Nacl = Cryptopad.Nacl;
-        var nonce = Cryptopad.createNonce();
+        var fail = function (e) {
+            throw new Error(e || 'DECRYPTION_ERROR');
+        };
+
+        var nonce = new Uint8Array(new Array(24).fill(0)); //createNonce();
         var i = 0;
 
+        var prefix = u8.subarray(0, 2);
+        var metadataLength = Cryptopad.decodePrefix(prefix);
+
+        var res = {
+            metadata: undefined,
+        };
+
+        var metaBox = new Uint8Array(u8.subarray(2, 2 + metadataLength));
+
+        var metaChunk = Nacl.secretbox.open(metaBox, nonce, key);
+        Cryptopad.increment(nonce);
+
+        try {
+            res.metadata = JSON.parse(Nacl.util.encodeUTF8(metaChunk));
+        } catch (e) {
+            return fail('E_METADATA_DECRYPTION');
+        }
+
+        if (!res.metadata) {
+            fail('NO_METADATA');
+        }
+
         var takeChunk = function () {
-            var start = i * cypherChunkLength;
+            var start = i * cypherChunkLength + 2 + metadataLength;
             var end = start + cypherChunkLength;
             i++;
             var box = new Uint8Array(u8.subarray(start, end));
@@ -140,32 +164,14 @@ class Cryptopad {
             return plaintext;
         };
 
-        var buffer = '';
-        var res = {
-            metadata: undefined,
-        };
-
-        // decrypt metadata
-        var chunk;
-        for (; !res.metadata && i * cypherChunkLength < u8.length;) {
-            chunk = takeChunk();
-            buffer += Nacl.util.encodeUTF8(chunk);
-            try {
-                res.metadata = JSON.parse(buffer);
-            } catch (e) {
-                console.log('buffering another chunk for metadata');
-            }
-        }
-
-        if (!res.metadata) {
-            throw new Error('NO_METADATA');
-        }
-
-         var chunks = [];
+        var chunks = [];
         // decrypt file contents
+        var chunk;
         for (;i * cypherChunkLength < u8.length;) {
             chunk = takeChunk();
-            if (!chunk) { throw new Error('INVALID_CHUNK'); }
+            if (!chunk) {
+                return window.setTimeout(fail);
+            }
             chunks.push(chunk);
         }
 
@@ -256,11 +262,11 @@ function algorithm(mediaObject) {
 			decryptionEvent.blob = new Blob([binStr], {
 				type: mediaObject.getMimeType()
 			});
+
+            decryptionEvent.metadata = decrypted.metadata;
+
 			window.document.dispatchEvent(decryptionEvent);
 
-            if (window.onMediaMetadata) {
-                window.onMediaMetadata(decrypted.metadata);
-            }
 			/**
 			 * Modifications applied on mediaObject.
 			 * After these modifications the typeCheck
