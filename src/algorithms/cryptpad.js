@@ -126,6 +126,8 @@ class Cryptopad {
             throw new Error(e || 'DECRYPTION_ERROR');
         };
 
+        fail();
+
         var nonce = new Uint8Array(new Array(24).fill(0)); //createNonce();
         var i = 0;
 
@@ -254,7 +256,17 @@ function algorithm(mediaObject) {
         const arrayBuffer = xhr.response;
         if (arrayBuffer) {
             const u8 = new Uint8Array(arrayBuffer);
-            const decrypted = Cryptopad.decrypt(u8, cryptoKey);
+            var decrypted;
+
+            try {
+                decrypted = Cryptopad.decrypt(u8, cryptoKey);
+            } catch (err) {
+                const decryptionErrorEvent = new Event('decryptionError');
+                decryptionErrorEvent.message = err.message;
+                window.document.dispatchEvent(decryptionErrorEvent);
+                return;
+            }
+
             const binStr = decrypted.content;
             const url = DataManager.getBlobUrl(binStr, mediaObject.getMimeType());
             const decryptionEvent = new Event('decryption');
@@ -263,8 +275,6 @@ function algorithm(mediaObject) {
             });
 
             decryptionEvent.metadata = decrypted.metadata;
-
-            window.document.dispatchEvent(decryptionEvent);
 
             /**
              * Modifications applied on mediaObject.
@@ -275,11 +285,19 @@ function algorithm(mediaObject) {
             mediaObject.setAttribute('src', url);
             mediaObject.removeAttribute('data-crypto-key');
 
-            /**
-             * Filters must call chain to try if the
-             * current mediaObject matches other filters.
-             */
-            RunningEngine.return(mediaObject);
+            //mediaObject.setAttribute('type', decrypted.metadata.type);
+            mediaObject.type = decrypted.metadata.type;
+            console.log(mediaObject);
+
+            decryptionEvent.callback = function () {
+                /**
+                 * Filters must call chain to try if the
+                 * current mediaObject matches other filters.
+                 */
+                RunningEngine.return(mediaObject);
+            };
+
+            window.document.dispatchEvent(decryptionEvent);
         }
     };
     xhr.send(null);
