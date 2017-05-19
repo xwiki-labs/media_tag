@@ -120,15 +120,17 @@ class Cryptopad {
      * @param      {String}  key     The key
      * @return     object YOLO
      */
-    static decrypt (u8, key) {
+    static decrypt (u8, key, done) {
         const Nacl = Cryptopad.Nacl;
-        var fail = function (e) {
-            throw new Error(e || 'DECRYPTION_ERROR');
+
+        const progress = function (offset) {
+            const ev = new Event('decryptionProgress');
+            ev.percent = (offset / u8.length) * 100;
+
+            window.document.dispatchEvent(ev);
         };
 
-        fail();
-
-        var nonce = new Uint8Array(new Array(24).fill(0)); //createNonce();
+        var nonce = Cryptopad.createNonce();
         var i = 0;
 
         var prefix = u8.subarray(0, 2);
@@ -143,43 +145,49 @@ class Cryptopad {
         var metaChunk = Nacl.secretbox.open(metaBox, nonce, key);
         Cryptopad.increment(nonce);
 
-        try {
-            res.metadata = JSON.parse(Nacl.util.encodeUTF8(metaChunk));
-        } catch (e) {
-            return fail('E_METADATA_DECRYPTION');
-        }
+        try { res.metadata = JSON.parse(Nacl.util.encodeUTF8(metaChunk)); }
+        catch (e) { return done('E_METADATA_DECRYPTION'); }
 
-        if (!res.metadata) {
-            fail('NO_METADATA');
-        }
+        if (!res.metadata) { return done('NO_METADATA'); }
 
-        var takeChunk = function () {
-            var start = i * cypherChunkLength + 2 + metadataLength;
-            var end = start + cypherChunkLength;
+        var takeChunk = function (cb) {
+            const start = i * cypherChunkLength + 2 + metadataLength;
+            const end = start + cypherChunkLength;
             i++;
-            var box = new Uint8Array(u8.subarray(start, end));
+            const box = new Uint8Array(u8.subarray(start, end));
 
             // decrypt the chunk
-            var plaintext = Nacl.secretbox.open(box, nonce, key);
+            const plaintext = Nacl.secretbox.open(box, nonce, key);
             Cryptopad.increment(nonce);
-            return plaintext;
+
+            if (!plaintext) { return void cb('DECRYPTION_FAILURE'); }
+
+            progress(Math.min(end, u8.length));
+
+            cb(void 0, plaintext);
         };
 
         var chunks = [];
+
         // decrypt file contents
-        var chunk;
-        for (;i * cypherChunkLength < u8.length;) {
-            chunk = takeChunk();
-            if (!chunk) {
-                return window.setTimeout(fail);
-            }
-            chunks.push(chunk);
+        var again = function () {
+            takeChunk(function (e, plaintext) {
+                if (e) { return setTimeout(function () { done(e); }); }
+
+                if (plaintext) {
+                    if (i * cypherChunkLength < u8.length) { // not done
+                        chunks.push(plaintext);
+                        return again();
+                    }
+
+                    chunks.push(plaintext);
+                    res.content = Cryptopad.joinChunks(chunks);
+                    return done(void 0, res);
+                }
+                done('UNEXPECTED_ENDING');
+            });
         }
-
-        // send chunks
-        res.content = Cryptopad.joinChunks(chunks);
-
-        return res;
+        again();
     };
 }
 /**
@@ -256,48 +264,47 @@ function algorithm(mediaObject) {
         const arrayBuffer = xhr.response;
         if (arrayBuffer) {
             const u8 = new Uint8Array(arrayBuffer);
-            var decrypted;
 
-            try {
-                decrypted = Cryptopad.decrypt(u8, cryptoKey);
-            } catch (err) {
-                const decryptionErrorEvent = new Event('decryptionError');
-                decryptionErrorEvent.message = err.message;
-                window.document.dispatchEvent(decryptionErrorEvent);
-                return;
-            }
+            Cryptopad.decrypt(u8, cryptoKey, function (err, decrypted) {
+                if (err) {
+                    const decryptionErrorEvent = new Event('decryptionError');
+                    decryptionErrorEvent.message = err.message;
+                    window.document.dispatchEvent(decryptionErrorEvent);
+                    return;
+                }
 
-            const binStr = decrypted.content;
-            const url = DataManager.getBlobUrl(binStr, mediaObject.getMimeType());
-            const decryptionEvent = new Event('decryption');
-            decryptionEvent.blob = new Blob([binStr], {
-                type: mediaObject.getMimeType()
-            });
+                const binStr = decrypted.content;
+                const url = DataManager.getBlobUrl(binStr, mediaObject.getMimeType());
+                const decryptionEvent = new Event('decryption');
+                decryptionEvent.blob = new Blob([binStr], {
+                    type: mediaObject.getMimeType()
+                });
 
-            decryptionEvent.metadata = decrypted.metadata;
+                decryptionEvent.metadata = decrypted.metadata;
 
-            /**
-             * Modifications applied on mediaObject.
-             * After these modifications the typeCheck
-             * method must return false otherwise the
-             * filter may infinite loop.
-             */
-            mediaObject.setAttribute('src', url);
-            mediaObject.removeAttribute('data-crypto-key');
-
-            //mediaObject.setAttribute('type', decrypted.metadata.type);
-            mediaObject.type = decrypted.metadata.type;
-            console.log(mediaObject);
-
-            decryptionEvent.callback = function () {
                 /**
-                 * Filters must call chain to try if the
-                 * current mediaObject matches other filters.
+                 * Modifications applied on mediaObject.
+                 * After these modifications the typeCheck
+                 * method must return false otherwise the
+                 * filter may infinite loop.
                  */
-                RunningEngine.return(mediaObject);
-            };
+                mediaObject.setAttribute('src', url);
+                mediaObject.removeAttribute('data-crypto-key');
 
-            window.document.dispatchEvent(decryptionEvent);
+                //mediaObject.setAttribute('type', decrypted.metadata.type);
+                //mediaObject.type = decrypted.metadata.type;
+                ///console.log(mediaObject);
+
+                decryptionEvent.callback = function () {
+                    /**
+                     * Filters must call chain to try if the
+                     * current mediaObject matches other filters.
+                     */
+                    RunningEngine.return(mediaObject);
+                };
+
+                window.document.dispatchEvent(decryptionEvent);
+            });
         }
     };
     xhr.send(null);
